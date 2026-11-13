@@ -103,7 +103,7 @@ async function loadApps(){if(!udid())return;$('apps').innerHTML='<li class="mut"
  try{APPS=await api('/api/apps?udid='+udid());renderApps()}catch(e){$('apps').innerHTML='';log(e.message,'err')}}
 function renderApps(){const q=$('q').value.toLowerCase();const a=APPS.filter(x=>(x.name+x.id).toLowerCase().includes(q));$('cnt').textContent='('+APPS.length+')';
  $('apps').innerHTML=a.map(x=>`<li><div class="grow"><div class="nm">${esc(x.name)} <span class="mut">${esc(x.ver)}</span>${x.dev?'<span class="badge">dev</span>':''}${x.store?'<span class="badge">App Store</span>':''}</div>
- <div class="mut nm">${x.id} · ${fmt(x.size)}</div></div><div class="acts">
+ <div class="mut nm">${x.id} · ${fmt(x.size)}${x.buyer?' · Apple ID: '+esc(x.buyer):''}</div></div><div class="acts">
  ${x.files?`<button class="sec sm" data-a="files" data-id="${x.id}">Файлы</button>`:''}
  ${x.store?`<button class="sec sm" data-a="ipa" data-id="${x.id}">Выгрузить IPA</button>`:`<button class="sec sm" data-a="backup" data-id="${x.id}">Бэкап</button>`}<button class="sec sm red" data-a="rm" data-id="${x.id}">Удалить</button></div></li>`).join('')}
 $('apps').onclick=async e=>{const b=e.target.closest('button');if(!b)return;const id=b.dataset.id,app=APPS.find(x=>x.id===id);

@@ -94,17 +94,41 @@ async def _devices():
     return list(res.values())
 
 
+STOREMETA = {}  # bundle id -> данные покупки из iTunesMetadata на устройстве
+
+
+def parse_itunes_meta(raw):
+    try:
+        m = plistlib.loads(raw) if isinstance(raw, (bytes, bytearray)) else (raw or {})
+    except Exception:
+        return {}
+    acc = m.get("com.apple.iTunesStore.downloadInfo", {}).get("accountInfo", {}) if isinstance(m, dict) else {}
+    return {"itemId": m.get("itemId"), "versionId": m.get("softwareVersionExternalIdentifier"),
+            "appleId": acc.get("AppleID") or m.get("appleId") or "", "ver": m.get("bundleShortVersionString", "")}
+
+
 async def _apps(udid):
     async with await lockdown(udid) as ld:
         async with InstallationProxyService(lockdown=ld) as ip:
             data = await ip.get_apps(application_type="User", calculate_sizes=True)
+            try:
+                extra = await ip.lookup({"ApplicationType": "User",
+                                         "ReturnAttributes": ["CFBundleIdentifier", "iTunesMetadata"]}) or {}
+            except Exception:
+                extra = {}
+    for b, a in extra.items():
+        if a.get("iTunesMetadata"):
+            STOREMETA[b] = parse_itunes_meta(a["iTunesMetadata"])
     out = []
     for b, a in data.items():
         ent = a.get("Entitlements") or {}
+        if b in STOREMETA:
+            a["iTunesMetadata"] = True
         out.append({"id": b, "name": a.get("CFBundleDisplayName") or a.get("CFBundleName") or b,
                     "ver": a.get("CFBundleShortVersionString", ""),
                     "size": int(a.get("StaticDiskUsage") or 0) + int(a.get("DynamicDiskUsage") or 0),
                     "files": bool(a.get("UIFileSharingEnabled")),
+                    "buyer": (STOREMETA.get(b) or {}).get("appleId", ""),
                     "dev": bool(ent.get("get-task-allow")),
                     # App Store: есть метаданные покупки/подпись Apple, либо нет ни dev-подписи, ни профиля (sideload)
                     "store": bool(a.get("iTunesMetadata") or a.get("ApplicationDSID")
@@ -369,13 +393,26 @@ def as_logout():
 
 
 async def as_download(job, bid):
+    meta = STOREMETA.get(bid) or {}
     out_dir = os.path.join(DATA, "tmp")
     os.makedirs(out_dir, exist_ok=True)
     JOBS[job]["log"] = "Скачивание из App Store… (может занять несколько минут)"
-    rc, rows, err = await asyncio.to_thread(ipatool, "download", "-b", bid, "--purchase", "-o", out_dir + os.sep, timeout=3600)
+    if meta.get("itemId"):  # как iMazing: по номеру приложения и версии с телефона — работает и для удалённых из стора
+        args = ["download", "-i", str(meta["itemId"]), "--purchase", "-o", out_dir + os.sep]
+        if meta.get("versionId"):
+            args += ["--external-version-id", str(meta["versionId"])]
+    else:
+        args = ["download", "-b", bid, "--purchase", "-o", out_dir + os.sep]
+    rc, rows, err = await asyncio.to_thread(ipatool, *args, timeout=3600)
+    if (rc != 0 or err) and meta.get("versionId") and "version" in (err or "").lower():
+        args = args[:args.index("--external-version-id")]  # эта версия недоступна — берём последнюю
+        rc, rows, err = await asyncio.to_thread(ipatool, *args, timeout=3600)
     path = next((r.get("output") for r in rows if r.get("output")), None)
     if rc != 0 or not path or not os.path.exists(path):
-        raise RuntimeError(as_error(err))
+        msg = as_error(err)
+        if meta.get("appleId") and any(x in (err or "").lower() for x in ("license", "not found", "purchase", "item")):
+            msg += f" Это приложение на iPhone скачано с Apple ID {meta['appleId']} — войдите в Avero им."
+        raise RuntimeError(msg)
     with open(path, "rb") as f:
         fn = lib_save(f.read())
     os.remove(path)
