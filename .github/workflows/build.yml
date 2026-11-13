@@ -23,7 +23,11 @@ jobs:
       - name: Build exe
         run: pyinstaller --noconfirm --onefile --windowed --name Avero --icon assets/icon.ico --add-data "index.html;." --collect-all pymobiledevice3 --collect-all webview app.py
       - name: Selftest
-        run: Start-Process dist\Avero.exe -ArgumentList "--selftest" -Wait -PassThru | ForEach-Object { if ($_.ExitCode -ne 0) { exit 1 } }
+        shell: pwsh
+        run: |
+          $p = Start-Process dist\Avero.exe -ArgumentList "--selftest" -Wait -PassThru
+          Get-Content selftest.log
+          if ($p.ExitCode -ne 0) { exit 1 }
       - uses: actions/upload-artifact@v4
         with:
           name: Avero
