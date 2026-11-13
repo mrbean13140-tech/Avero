@@ -13,15 +13,23 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt pyinstaller
+      - name: Build ipatool (App Store)
+        shell: bash
+        run: |
+          git clone -q --depth 1 --branch v2.8.1 https://github.com/majd/ipatool ipatool-src
+          cd ipatool-src && go build -ldflags="-X github.com/majd/ipatool/v2/cmd.version=2.8.1" -o ../ipatool.exe .
       - name: Set version
         shell: bash
         run: sed -i "s/^__version__ = .*/__version__ = \"0.1.${{ github.run_number }}\"/" app.py
       - name: Build exe
-        run: pyinstaller --noconfirm --onefile --windowed --name Avero --icon assets/icon.ico --add-data "index.html;." --collect-all pymobiledevice3 --collect-all webview app.py
+        run: pyinstaller --noconfirm --onefile --windowed --name Avero --icon assets/icon.ico --add-data "index.html;." --add-binary "ipatool.exe;." --collect-all pymobiledevice3 --collect-all webview app.py
       - name: Selftest
         shell: pwsh
         run: |

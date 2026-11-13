@@ -106,7 +106,10 @@ async def _apps(udid):
                     "size": int(a.get("StaticDiskUsage") or 0) + int(a.get("DynamicDiskUsage") or 0),
                     "files": bool(a.get("UIFileSharingEnabled")),
                     "dev": bool(ent.get("get-task-allow")),
-                    "store": bool(a.get("iTunesMetadata") or a.get("ApplicationDSID"))})
+                    # App Store: есть метаданные покупки/подпись Apple, либо нет ни dev-подписи, ни профиля (sideload)
+                    "store": bool(a.get("iTunesMetadata") or a.get("ApplicationDSID")
+                                  or "Apple iPhone OS Application Signing" in str(a.get("SignerIdentity", ""))
+                                  or (not ent.get("get-task-allow") and not a.get("ProfileValidated")))})
     return sorted(out, key=lambda x: x["name"].lower())
 
 
@@ -276,6 +279,76 @@ async def restore_app(job, udid, fn):
     return f"Данные восстановлены ({len(entries)} файлов). Перезапустите приложение на iPhone."
 
 
+# ---------- App Store (через встроенный ipatool) ----------
+
+IPATOOL = os.path.join(BASE, "ipatool.exe" if os.name == "nt" else "ipatool")
+
+
+def ipatool(*args, timeout=600):
+    if not os.path.exists(IPATOOL):
+        raise RuntimeError("ipatool не найден в сборке")
+    p = subprocess.run([IPATOOL, *args, "--format", "json", "--non-interactive", "--keychain-passphrase", "avero"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                       creationflags=0x08000000 if os.name == "nt" else 0)  # CREATE_NO_WINDOW
+    rows = []
+    for line in (p.stdout + "\n" + p.stderr).splitlines():
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            if line.strip():
+                rows.append({"message": line.strip()})
+    err = next((r.get("error") or r.get("message") for r in rows if r.get("level") == "error" or r.get("error")), None)
+    return p.returncode, rows, err
+
+
+def as_error(err):
+    m = (err or "").lower()
+    if "auth code" in m or "2fa" in m:
+        return "Нужен код двухфакторной аутентификации"
+    if "not logged" in m or "keychain" in m or "sign in" in m or "account" in m and "not" in m:
+        return "Войдите в Apple ID (кнопка «Apple ID» сверху)"
+    if "license" in m or "purchase" in m:
+        return "Приложение не куплено на этом Apple ID: " + (err or "")[:200]
+    if "password" in m or "credentials" in m or "badlogin" in m:
+        return "Неверный Apple ID или пароль"
+    return (err or "Неизвестная ошибка ipatool")[:400]
+
+
+def as_status():
+    code, rows, err = ipatool("auth", "info", timeout=60)
+    acc = next((r for r in rows if r.get("email")), None)
+    return {"logged": bool(acc) and code == 0, "email": (acc or {}).get("email", ""), "name": (acc or {}).get("name", "")}
+
+
+def as_login(email, password, code=""):
+    args = ["auth", "login", "-e", email, "-p", password] + (["--auth-code", code] if code else [])
+    rc, rows, err = ipatool(*args, timeout=300)
+    if any("2FA code is required" in str(r.get("message", "")) for r in rows):
+        return {"ok": False, "need2fa": True, "error": "Введите код, пришедший на ваши устройства Apple"}
+    if rc == 0 and any(r.get("success") for r in rows):
+        return {"ok": True, **as_status()}
+    return {"ok": False, "error": as_error(err)}
+
+
+def as_logout():
+    ipatool("auth", "revoke", timeout=60)
+    return {"log": "Вы вышли из Apple ID"}
+
+
+async def as_download(job, bid):
+    out_dir = os.path.join(DATA, "tmp")
+    os.makedirs(out_dir, exist_ok=True)
+    JOBS[job]["log"] = "Скачивание из App Store… (может занять несколько минут)"
+    rc, rows, err = await asyncio.to_thread(ipatool, "download", "-b", bid, "--purchase", "-o", out_dir + os.sep, timeout=3600)
+    path = next((r.get("output") for r in rows if r.get("output")), None)
+    if rc != 0 or not path or not os.path.exists(path):
+        raise RuntimeError(as_error(err))
+    with open(path, "rb") as f:
+        fn = lib_save(f.read())
+    os.remove(path)
+    return f"IPA сохранён в библиотеку: {fn}. Он зашифрован App Store и ставится на устройства с этим же Apple ID."
+
+
 # ---------- автообновление ----------
 
 def gh_latest():
@@ -376,6 +449,7 @@ class H(BaseHTTPRequestHandler):
         if g == "/api/backups": return self.safe(bak_list)
         if g == "/api/docs": return self.safe(lambda: _docs_list(q["udid"], q["id"], q.get("path", "")))
         if g == "/api/update": return self.safe(update_check)
+        if g == "/api/as/status": return self.safe(as_status)
         if g in ("/api/lib/file", "/api/backup/file", "/api/docs/file"):
             try:
                 if g == "/api/docs/file":
@@ -426,6 +500,12 @@ class H(BaseHTTPRequestHandler):
             return self.safe(lambda: os.remove(lib_path(q["file"], BAK)) or {"log": "Бэкап удалён"})
         if g == "/api/open":
             return self.safe(lambda: open_folder({"lib": LIB, "bak": BAK}.get(q.get("what"), DATA)) or {"log": "ok"})
+        if g == "/api/as/login":
+            d = json.loads(self.body() or b"{}")
+            return self.safe(lambda: as_login(d.get("email", "").strip(), d.get("password", ""), d.get("code", "").strip()))
+        if g == "/api/as/logout": return self.safe(as_logout)
+        if g == "/api/as/download":
+            return self.send(200, {"job": job_start("App Store…", lambda j: as_download(j, q["id"]))})
         if g == "/api/update/apply":
             return self.send(200, {"job": job_start("Проверка обновления…", update_apply)})
         self.send(404, {"error": "not found"})
@@ -445,6 +525,7 @@ def main():
         try:
             import webview  # noqa: F401
             assert os.path.exists(os.path.join(BASE, "index.html")), "index.html не упакован"
+            assert os.path.exists(IPATOOL), "ipatool не упакован"
             msg, code = "selftest ok " + __version__, 0
         except BaseException:
             msg, code = traceback.format_exc(), 1
