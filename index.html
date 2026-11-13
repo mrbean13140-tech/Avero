@@ -30,6 +30,7 @@ li:first-child{border-top:0}#log{white-space:pre-wrap;font:12px ui-monospace,Con
 <b>Установленные приложения <span id="cnt" class="mut"></span></b>
 <button class="sec" onclick="loadApps()">Обновить</button></div>
 <input id="q" placeholder="Поиск" oninput="render()"><ul id="apps"></ul></div>
+<p class="mut" id="phone" style="text-align:center"></p>
 </main><script>
 const $=id=>document.getElementById(id);let DEVS=[],APPS=[];
 const udid=()=>$('dev').value;
@@ -58,4 +59,5 @@ $('file').onchange=e=>{[...e.target.files].forEach(install);e.target.value=''};
 drop.ondragover=e=>{e.preventDefault();drop.classList.add('on')};drop.ondragleave=()=>drop.classList.remove('on');
 drop.ondrop=e=>{e.preventDefault();drop.classList.remove('on');[...e.dataTransfer.files].forEach(install)};
 $('dev').onchange=()=>{showInfo();loadApps()};loadDevices();
+api('/api/info').then(i=>$('phone').textContent='С телефона в этой сети: '+i.phone).catch(()=>{});
 </script></body></html>

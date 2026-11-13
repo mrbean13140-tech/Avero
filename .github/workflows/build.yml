@@ -21,9 +21,9 @@ jobs:
         shell: bash
         run: sed -i "s/^__version__ = .*/__version__ = \"0.1.${{ github.run_number }}\"/" app.py
       - name: Build exe
-        run: pyinstaller --noconfirm --onefile --console --name Avero --icon assets/icon.ico --add-data "index.html;." --collect-all pymobiledevice3 app.py
+        run: pyinstaller --noconfirm --onefile --windowed --name Avero --icon assets/icon.ico --add-data "index.html;." --collect-all pymobiledevice3 --collect-all webview app.py
       - name: Selftest
-        run: dist\Avero.exe --selftest
+        run: Start-Process dist\Avero.exe -ArgumentList "--selftest" -Wait -PassThru | ForEach-Object { if ($_.ExitCode -ne 0) { exit 1 } }
       - uses: actions/upload-artifact@v4
         with:
           name: Avero

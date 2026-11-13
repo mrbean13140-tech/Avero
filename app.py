@@ -3,6 +3,9 @@ import asyncio, json, os, socket, sys, threading, uuid, webbrowser
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs, unquote
 
+if sys.stdout is None or sys.stderr is None:  # exe без консоли: прогресс-бары и логи пишем в никуда
+    sys.stdout = sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
 from pymobiledevice3.usbmux import list_devices
 from pymobiledevice3.lockdown import create_using_usbmux
 from pymobiledevice3.services.installation_proxy import InstallationProxyService
@@ -108,6 +111,7 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/":
             with open(os.path.join(BASE, "index.html"), "rb") as f:
                 return self.send(200, f.read().replace(b"{{VERSION}}", __version__.encode()), "text/html; charset=utf-8")
+        if u.path == "/api/info": return self.send(200, {"phone": f"http://{lan_ip()}:{PORT}"})
         if u.path == "/api/devices": return self.safe(_devices())
         if u.path == "/api/apps": return self.safe(_apps(q["udid"][0]))
         if u.path == "/api/job": return self.send(200, JOBS.get(q["id"][0], {"state": "error", "log": "нет задачи"}))
@@ -139,17 +143,22 @@ def lan_ip():
 
 def main():
     if "--selftest" in sys.argv:  # проверка сборки в CI: модули и страница на месте
+        import webview  # noqa: F401
         assert os.path.exists(os.path.join(BASE, "index.html"))
-        print("selftest ok", __version__); return
+        sys.exit(0)
+    url = f"http://127.0.0.1:{PORT}"
     try:
         srv = ThreadingHTTPServer((HOST, PORT), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
     except OSError:
-        print(f"Порт {PORT} занят — похоже, Avero уже запущен."); webbrowser.open(f"http://localhost:{PORT}")
-        return
-    print(f"Avero {__version__}\n  На этом ПК:   http://localhost:{PORT}\n  С телефона:   http://{lan_ip()}:{PORT}\n"
-          "Не закрывайте это окно, пока работаете.")
-    webbrowser.open(f"http://localhost:{PORT}")
-    srv.serve_forever()
+        pass  # уже запущен — просто открываем ещё одно окно к нему
+    try:
+        import webview
+        webview.create_window("Avero", url, width=980, height=760, min_size=(420, 560))
+        webview.start()
+    except Exception:  # нет WebView2 — откроем в браузере
+        webbrowser.open(url)
+        threading.Event().wait()
 
 
 if __name__ == "__main__":
