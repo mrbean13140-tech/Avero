@@ -282,13 +282,42 @@ async def restore_app(job, udid, fn):
 # ---------- App Store (через встроенный ipatool) ----------
 
 IPATOOL = os.path.join(BASE, "ipatool.exe" if os.name == "nt" else "ipatool")
+SETTINGS = os.path.join(DATA, "settings.json")
+NETERR = ("eof", "connection reset", "timeout", "no such host", "connectex", "tls handshake", "forcibly closed")
 
 
-def ipatool(*args, timeout=600):
+def settings(new=None):
+    try:
+        with open(SETTINGS, encoding="utf-8") as f:
+            cur = json.load(f)
+    except (OSError, ValueError):
+        cur = {}
+    if new is not None:
+        cur.update(new)
+        with open(SETTINGS, "w", encoding="utf-8") as f:
+            json.dump(cur, f, ensure_ascii=False)
+    return cur
+
+
+def ipatool(*args, timeout=600, attempts=3):
+    for i in range(attempts):  # обрывы связи с Apple бывают разовыми — повторяем
+        code, rows, err = _ipatool(args, timeout)
+        if not err or not any(x in err.lower() for x in NETERR):
+            break
+    return code, rows, err
+
+
+def _ipatool(args, timeout):
     if not os.path.exists(IPATOOL):
         raise RuntimeError("ipatool не найден в сборке")
+    env = dict(os.environ)
+    proxy = settings().get("proxy", "").strip()
+    if proxy:
+        if "://" not in proxy:
+            proxy = "http://" + proxy
+        env.update(HTTPS_PROXY=proxy, HTTP_PROXY=proxy, https_proxy=proxy, http_proxy=proxy)
     p = subprocess.run([IPATOOL, *args, "--format", "json", "--non-interactive", "--keychain-passphrase", "avero"],
-                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, env=env,
                        creationflags=0x08000000 if os.name == "nt" else 0)  # CREATE_NO_WINDOW
     rows = []
     for line in (p.stdout + "\n" + p.stderr).splitlines():
@@ -303,6 +332,10 @@ def ipatool(*args, timeout=600):
 
 def as_error(err):
     m = (err or "").lower()
+    if any(x in m for x in NETERR) or "transport" in m:
+        return ("Нет связи с App Store (обрыв соединения с серверами Apple). В России провайдеры часто режут App Store: "
+                "укажите прокси ниже (например http://IP:порт или socks5://IP:порт вашего VPN) или пустите домены "
+                "itunes.apple.com и apple.com через VPN на роутере.")
     if "auth code" in m or "2fa" in m:
         return "Нужен код двухфакторной аутентификации"
     if "not logged" in m or "keychain" in m or "sign in" in m or "account" in m and "not" in m:
@@ -450,6 +483,7 @@ class H(BaseHTTPRequestHandler):
         if g == "/api/docs": return self.safe(lambda: _docs_list(q["udid"], q["id"], q.get("path", "")))
         if g == "/api/update": return self.safe(update_check)
         if g == "/api/as/status": return self.safe(as_status)
+        if g == "/api/settings": return self.send(200, settings())
         if g in ("/api/lib/file", "/api/backup/file", "/api/docs/file"):
             try:
                 if g == "/api/docs/file":
@@ -504,6 +538,9 @@ class H(BaseHTTPRequestHandler):
             d = json.loads(self.body() or b"{}")
             return self.safe(lambda: as_login(d.get("email", "").strip(), d.get("password", ""), d.get("code", "").strip()))
         if g == "/api/as/logout": return self.safe(as_logout)
+        if g == "/api/settings":
+            d = json.loads(self.body() or b"{}")
+            return self.send(200, settings({"proxy": str(d.get("proxy", "")).strip()}))
         if g == "/api/as/download":
             return self.send(200, {"job": job_start("App Store…", lambda j: as_download(j, q["id"]))})
         if g == "/api/update/apply":

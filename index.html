@@ -73,6 +73,9 @@ dialog::backdrop{background:#0006}.dh{padding:14px;border-bottom:1px solid var(-
 <input id="asp" class="q" type="password" placeholder="Пароль" autocomplete="current-password">
 <input id="asc" class="q hide" inputmode="numeric" placeholder="Код 2FA (6 цифр)">
 <div id="aserr" class="err" style="margin-bottom:8px"></div><button id="asgo" onclick="asLogin()" style="width:100%">Войти</button></div>
+<details id="asnet" style="margin-top:12px"><summary class="mut">Прокси для App Store (если не подключается)</summary>
+<div class="row" style="margin-top:8px"><input id="asproxy" class="grow" placeholder="http://IP:порт или socks5://IP:порт"><button class="sec" onclick="saveProxy()">Сохранить</button></div>
+<p class="mut" style="margin:6px 0 0">Пусто — напрямую. Можно указать HTTP или SOCKS5 вход вашего VPN-сервера.</p></details>
 <div id="asout" class="hide"><p>Вход выполнен: <b id="asname"></b></p><button class="sec" onclick="asLogout()" style="width:100%">Выйти</button></div>
 </div></dialog>
 <script>
@@ -166,11 +169,12 @@ async function doUpdate(){$('upd').querySelector('button').disabled=true;const{j
 let AS={logged:false};
 async function asRefresh(){try{AS=await api('/api/as/status');$('asbtn').textContent=AS.logged?'Apple ID ✓':'Apple ID';
  $('asin').classList.toggle('hide',AS.logged);$('asout').classList.toggle('hide',!AS.logged);$('asname').textContent=AS.name?AS.name+' ('+AS.email+')':AS.email}catch(e){}}
-function asOpen(){$('aserr').textContent='';$('asd').showModal();asRefresh()}
+function asOpen(){$('aserr').textContent='';$('asd').showModal();asRefresh();api('/api/settings').then(c=>{$('asproxy').value=c.proxy||'';if(c.proxy)$('asnet').open=true})}
+async function saveProxy(){await post('/api/settings',JSON.stringify({proxy:$('asproxy').value}),{'Content-Type':'application/json'});log('Прокси для App Store: '+($('asproxy').value||'выключен'),'ok')}
 async function asLogin(){const b=$('asgo');b.disabled=true;b.textContent='Вход… (первый раз до пары минут)';$('aserr').textContent='';
  try{const r=await post('/api/as/login',JSON.stringify({email:$('ase').value,password:$('asp').value,code:$('asc').value}),{'Content-Type':'application/json'});
   if(r.ok){log('Apple ID: вход выполнен','ok');$('asp').value=$('asc').value='';$('asc').classList.add('hide');await asRefresh()}
-  else{$('aserr').textContent=r.error;if(r.need2fa){$('asc').classList.remove('hide');$('asc').focus()}}}
+  else{$('aserr').textContent=r.error;if(/прокси/.test(r.error))$('asnet').open=true;if(r.need2fa){$('asc').classList.remove('hide');$('asc').focus()}}}
  catch(e){$('aserr').textContent=e.message}b.disabled=false;b.textContent='Войти'}
 async function asLogout(){await post('/api/as/logout');await asRefresh()}
 asRefresh();
