@@ -1,0 +1,52 @@
+name: build
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pyinstaller
+      - name: Set version
+        shell: bash
+        run: sed -i "s/^__version__ = .*/__version__ = \"0.1.${{ github.run_number }}\"/" app.py
+      - name: Build exe
+        run: pyinstaller --noconfirm --onefile --console --name Avero --icon assets/icon.ico --add-data "index.html;." --collect-all pymobiledevice3 app.py
+      - name: Selftest
+        run: dist\Avero.exe --selftest
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Avero
+          path: dist/Avero.exe
+      - name: Release notes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          MSG: ${{ github.event.head_commit.message }}
+        run: |
+          {
+            echo "## $(printf '%s\n' "$MSG" | head -1)"
+            echo
+            printf '%s\n' "$MSG" | tail -n +2 | grep -v -E '^(Co-Authored-By|Claude-Session):' || true
+            echo
+            echo "Скачайте **Avero.exe** ниже и запустите — установка не нужна."
+          } > release_notes.md
+      - name: Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.1.${{ github.run_number }}
+          name: Avero 0.1.${{ github.run_number }}
+          body_path: release_notes.md
+          files: dist/Avero.exe
+          make_latest: true

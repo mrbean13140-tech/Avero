@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Avero</title>
+<style>
+:root{--bg:#f5f5f7;--card:#fff;--fg:#1d1d1f;--mut:#6e6e73;--acc:#0071e3;--bad:#d70015;--ok:#248a3d;--bd:#e5e5ea}
+@media(prefers-color-scheme:dark){:root{--bg:#000;--card:#1c1c1e;--fg:#f5f5f7;--mut:#98989d;--bd:#38383a;--acc:#0a84ff}}
+*{box-sizing:border-box}body{margin:0;font:15px -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg)}
+main{max-width:760px;margin:0 auto;padding:16px max(16px,env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}h1{font-size:22px;margin:8px 0 16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px;margin-bottom:14px}
+select,button,input{font:inherit;font-size:16px;min-height:40px;border-radius:9px;border:1px solid var(--bd);padding:8px 12px;background:var(--card);color:var(--fg)}
+button{background:var(--acc);color:#fff;border:0;cursor:pointer}button.sec{background:transparent;color:var(--acc);border:1px solid var(--bd)}
+button.del{background:transparent;color:var(--bad);border:1px solid var(--bd);padding:5px 10px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.mut{color:var(--mut);font-size:13px}
+#drop{border:2px dashed var(--bd);border-radius:12px;padding:22px;text-align:center;cursor:pointer}#drop.on{border-color:var(--acc)}
+ul{list-style:none;margin:0;padding:0}li{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--bd)}
+li:first-child{border-top:0}#log{white-space:pre-wrap;font:12px ui-monospace,Consolas,monospace;max-height:180px;overflow:auto}
+.ok{color:var(--ok)}.err{color:var(--bad)}#q{width:100%;margin-bottom:8px}
+</style></head><body><main>
+<h1>Avero <span class="mut">{{VERSION}}</span></h1>
+<div class="card"><div class="row">
+<select id="dev" style="flex:1"><option>Поиск устройств…</option></select>
+<button class="sec" onclick="loadDevices()">Обновить</button></div>
+<div id="info" class="mut" style="margin-top:8px"></div></div>
+
+<div class="card"><div id="drop">Перетащите .ipa сюда или нажмите для выбора
+<input type="file" id="file" accept=".ipa" multiple hidden></div>
+<div id="log" class="mut" style="margin-top:10px"></div></div>
+
+<div class="card"><div class="row" style="justify-content:space-between;margin-bottom:8px">
+<b>Установленные приложения <span id="cnt" class="mut"></span></b>
+<button class="sec" onclick="loadApps()">Обновить</button></div>
+<input id="q" placeholder="Поиск" oninput="render()"><ul id="apps"></ul></div>
+</main><script>
+const $=id=>document.getElementById(id);let DEVS=[],APPS=[];
+const udid=()=>$('dev').value;
+function log(t,c=''){const d=document.createElement('div');d.className=c;d.textContent=t;$('log').prepend(d)}
+async function api(u,o){const r=await fetch(u,o);const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);return j}
+async function loadDevices(){
+ try{DEVS=await api('/api/devices');
+  $('dev').innerHTML=DEVS.length?DEVS.map(d=>`<option value="${d.udid}">${d.name} · ${d.model} · iOS ${d.ios} (${d.conn})</option>`).join(''):'<option value="">Нет устройств — подключите iPhone по USB и нажмите «Доверять»</option>';
+  showInfo();if(DEVS.length)loadApps();
+ }catch(e){$('dev').innerHTML='<option value="">Ошибка</option>';log(e.message,'err')}}
+function showInfo(){const d=DEVS.find(x=>x.udid===udid());$('info').textContent=d?'UDID: '+d.udid:''}
+async function loadApps(){if(!udid())return;$('apps').innerHTML='<li class="mut">Загрузка…</li>';
+ try{APPS=await api('/api/apps?udid='+udid());render()}catch(e){$('apps').innerHTML='';log(e.message,'err')}}
+function render(){const q=$('q').value.toLowerCase();const a=APPS.filter(x=>(x.name+x.id).toLowerCase().includes(q));
+ $('cnt').textContent='('+APPS.length+')';
+ $('apps').innerHTML=a.map(x=>`<li><div><div>${x.name} <span class="mut">${x.ver}</span></div><div class="mut">${x.id}</div></div><button class="del" data-id="${x.id}">Удалить</button></li>`).join('')}
+$('apps').onclick=async e=>{const id=e.target.dataset.id;if(!id||!confirm('Удалить '+id+'?'))return;
+ e.target.disabled=true;try{await api(`/api/uninstall?udid=${udid()}&id=${encodeURIComponent(id)}`,{method:'POST'});log('Удалено: '+id,'ok');loadApps()}catch(err){log(err.message,'err');e.target.disabled=false}};
+async function install(f){if(!udid())return log('Нет устройства','err');log('Загрузка '+f.name+'…');
+ try{const{job}=await api('/api/install?udid='+udid(),{method:'POST',headers:{'X-Filename':encodeURIComponent(f.name)},body:f});
+  const t=setInterval(async()=>{const j=await api('/api/job?id='+job);if(j.state==='running')return;clearInterval(t);
+   log(f.name+': '+j.log,j.state==='ok'?'ok':'err');if(j.state==='ok')loadApps()},2000);
+ }catch(e){log(e.message,'err')}}
+const drop=$('drop');drop.onclick=()=>$('file').click();
+$('file').onchange=e=>{[...e.target.files].forEach(install);e.target.value=''};
+drop.ondragover=e=>{e.preventDefault();drop.classList.add('on')};drop.ondragleave=()=>drop.classList.remove('on');
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove('on');[...e.dataTransfer.files].forEach(install)};
+$('dev').onchange=()=>{showInfo();loadApps()};loadDevices();
+</script></body></html>
