@@ -143,9 +143,16 @@ def lan_ip():
 
 def main():
     if "--selftest" in sys.argv:  # проверка сборки в CI: модули и страница на месте
-        import webview  # noqa: F401
-        assert os.path.exists(os.path.join(BASE, "index.html"))
-        sys.exit(0)
+        import traceback
+        try:
+            import webview  # noqa: F401
+            assert os.path.exists(os.path.join(BASE, "index.html")), "index.html не упакован"
+            msg, code = "selftest ok " + __version__, 0
+        except BaseException:
+            msg, code = traceback.format_exc(), 1
+        with open("selftest.log", "w", encoding="utf-8") as f:
+            f.write(msg)
+        os._exit(code)
     url = f"http://127.0.0.1:{PORT}"
     try:
         srv = ThreadingHTTPServer((HOST, PORT), H)
